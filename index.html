@@ -4189,13 +4189,14 @@ function downloadHR(forcePublished){
       date_hired:sl.date_hired||null,
       date_resigned:sl.date_resigned||null
     }));
-  // Look up real lifecycle dates (date_hired / date_resigned) from staffList
-  // for ALL staff including core SCHED_STAFF, so resigned core staff (e.g. Alleli)
-  // are correctly excluded from the HR export.
-  const _lifeByName=new Map((staffList||[]).map(sl=>[sl.name.toLowerCase(),sl]));
+  // Look up real lifecycle dates (date_hired / date_resigned) from the FULL roster
+  // (window.allStaffForGen includes INACTIVE staff). staffList only has active staff,
+  // so resigned staff like Alleli must be matched against the full roster.
+  const _lifeRoster=(window.allStaffForGen&&window.allStaffForGen.length)?window.allStaffForGen:(staffList||[]);
+  const _lifeByName=new Map(_lifeRoster.map(sl=>[sl.name.toLowerCase(),sl]));
   function _lifeFor(s){
     const sl=_lifeByName.get(s.nick?.toLowerCase())||_lifeByName.get(s.full?.toLowerCase())||null;
-    return {date_hired:sl?.date_hired||null, date_resigned:sl?.date_resigned||null};
+    return {date_hired:sl?.date_hired||null, date_resigned:sl?.date_resigned||null, _inRoster:!!sl, _active:sl?(sl.active!==false&&sl.active!=='false'):true};
   }
   const allHRStaff=[
     ...SCHED_STAFF.map(s=>({...s,..._lifeFor(s)})),
@@ -4203,7 +4204,15 @@ function downloadHR(forcePublished){
   ];
   const shiftMap={'8AM-5PM':['08:00','17:00'],'7AM-4PM':['07:00','16:00'],'9AM-6PM':['09:00','18:00'],'9AM-5PM':['09:00','17:00'],'8AM-4PM':['08:00','16:00']};
   const rows=[['EmployeeID','Fullname','Work Date','Shift Start','Shift End','RD Flag']];
+  // Determine the export's date span for whole-staff lifecycle exclusion
+  const _exDks=hrDays.map(d=>dsS(d)).sort();
+  const _exFirst=_exDks[0], _exLast=_exDks[_exDks.length-1];
   allHRStaff.forEach(s=>{
+    // Whole-staff lifecycle exclusion: skip if resigned before this month starts
+    // or hired after this month ends — they don't belong in this export at all.
+    if(s.date_resigned&&s.date_resigned<_exFirst)return;
+    if(s.date_hired&&s.date_hired>_exLast)return;
+    let wroteAny=false;
     hrDays.forEach(day=>{
       const dk=dsS(day);
       const rawVal=sched[dk]?.[s.key];
@@ -4217,8 +4226,9 @@ function downloadHR(forcePublished){
       const isHolDay=v==='HOL';
       const[st,en]=rd===1?['','']:(isLeave(v)||isHolDay)?['08:00','17:00']:(shiftMap[actualShift]||['08:00','17:00']);
       rows.push([s.id,s.hrName,xlDate(day),st,en,rd]);
+      wroteAny=true;
     });
-    rows.push(['','']);
+    if(wroteAny)rows.push(['','']);
   });
   const wb=XLSX.utils.book_new();const ws=XLSX.utils.aoa_to_sheet(rows);
   ws['!cols']=[{wch:12},{wch:32},{wch:12},{wch:12},{wch:12},{wch:8}];
